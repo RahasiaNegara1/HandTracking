@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hand Tracking AI - Fixed Version</title>
+  
+  <!-- MediaPipe Libraries (Versi CDN yang Stabil) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.4/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.4/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #121212;
+      color: #ffffff;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+
+    #error-message {
+      display: none;
+      background-color: #ff4d4d;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      max-width: 800px;
+      text-align: center;
+    }
+
+    #container {
+      position: relative;
+      width: 960px;
+      height: 540px;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    video {
+      display: none;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+    }
+
+    /* Target Interaktif Virtual */
+    #interactive-box {
+      position: absolute;
+      top: 50px;
+      left: 50px;
+      width: 120px;
+      height: 120px;
+      background-color: #3498db;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      font-weight: bold;
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.2s;
+    }
+
+    #cursor {
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      background-color: rgba(255, 0, 0, 0.8);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      display: none;
+      z-index: 100;
+      transition: background-color 0.1s, transform 0.1s;
+    }
+
+    #status-panel {
+      margin-top: 15px;
+      background: #1e1e1e;
+      padding: 15px 25px;
+      border-radius: 8px;
+      display: flex;
+      gap: 30px;
+    }
+
+    .status-item {
+      font-size: 16px;
+    }
+
+    .highlight {
+      color: #00ff88;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Hand Tracking & Virtual Interaction</h1>
+
+  <div id="error-message"></div>
+
+  <div id="container">
+    <video id="webcam" playsinline></video>
+    <canvas id="output_canvas" width="1280" height="720"></canvas>
+    
+    <!-- Element Interaktif untuk Dites -->
+    <div id="interactive-box">Geser Saya</div>
+    <div id="cursor"></div>
+  </div>
+
+  <div id="status-panel">
+    <div class="status-item">Jumlah Tangan: <span id="hand-count" class="highlight">0</span></div>
+    <div class="status-item">Gesture: <span id="gesture-detected" class="highlight">Tidak Ada</span></div>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('webcam');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const cursor = document.getElementById('cursor');
+    const handCountEl = document.getElementById('hand-count');
+    const gestureEl = document.getElementById('gesture-detected');
+    const errorMessage = document.getElementById('error-message');
+    const box = document.getElementById('interactive-box');
+
+    function showError(msg) {
+      errorMessage.style.display = 'block';
+      errorMessage.innerHTML = msg;
+    }
+
+    function calculateDistance(p1, p2) {
+      return Math.sqrt(
+        Math.pow(p1.x - p2.x, 2) +
+        Math.pow(p1.y - p2.y, 2) +
+        Math.pow(p1.z - p2.z, 2)
+      );
+    }
+
+    function detectGesture(landmarks) {
+      const thumbTip = landmarks[4];
+      const indexTip = landmarks[8];
+      const middleTip = landmarks[12];
+      const ringTip = landmarks[16];
+      const pinkyTip = landmarks[20];
+      const wrist = landmarks[0];
+
+      const pinchDistance = calculateDistance(thumbTip, indexTip);
+      if (pinchDistance < 0.06) {
+        return 'Pinch (Klik/Hold)';
+      }
+
+      const isFist = [indexTip, middleTip, ringTip, pinkyTip].every(
+        tip => calculateDistance(tip, wrist) < 0.28
+      );
+      if (isFist) {
+        return 'Mengepal';
+      }
+
+      return 'Terbuka';
+    }
+
+    // Variabel untuk Drag and Drop Interaktif
+    let isDragging = false;
+    let offsetX = 0, offsetY = 0;
+
+    function onResults(results) {
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        handCountEl.innerText = results.multiHandLandmarks.length;
+
+        for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+          const landmarks = results.multiHandLandmarks[i];
+
+          drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 3 });
+          drawLandmarks(canvasCtx, landmarks, { color: '#FF0000', lineWidth: 1, radius: 4 });
+
+          if (i === 0) {
+            const currentGesture = detectGesture(landmarks);
+            gestureEl.innerText = currentGesture;
+
+            const indexTip = landmarks[8];
+            const containerRect = canvasElement.getBoundingClientRect();
+            
+            // Perhitungan Posisi Kursor Presisi
+            const cursorX = (1 - indexTip.x) * containerRect.width;
+            const cursorY = indexTip.y * containerRect.height;
+
+            cursor.style.display = 'block';
+            cursor.style.left = `${cursorX}px`;
+            cursor.style.top = `${cursorY}px`;
+
+            const boxRect = box.getBoundingClientRect();
+            const relCursorX = containerRect.left + cursorX;
+            const relCursorY = containerRect.top + cursorY;
+
+            // Logika Drag and Drop pada Elemen HTML
+            if (currentGesture === 'Pinch (Klik/Hold)') {
+              cursor.style.backgroundColor = '#00ff88';
+
+              if (!isDragging) {
+                // Cek apakah kursor berada di dalam kotak
+                if (
+                  relCursorX >= boxRect.left &&
+                  relCursorX <= boxRect.right &&
+                  relCursorY >= boxRect.top &&
+                  relCursorY <= boxRect.bottom
+                ) {
+                  isDragging = true;
+                  box.style.backgroundColor = '#e74c3c';
+                }
+              }
+
+              if (isDragging) {
+                box.style.left = `${cursorX - 60}px`;
+                box.style.top = `${cursorY - 60}px`;
+              }
+            } else {
+              cursor.style.backgroundColor = 'rgba(255, 0, 0, 0.8)';
+              isDragging = false;
+              box.style.backgroundColor = '#3498db';
+            }
+          }
+        }
+      } else {
+        handCountEl.innerText = '0';
+        gestureEl.innerText = 'Tidak Ada';
+        cursor.style.display = 'none';
+        isDragging = false;
+      }
+
+      canvasCtx.restore();
+    }
+
+    // Penanganan Error & Inisialisasi MediaPipe
+    try {
+      const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      hands.onResults(onResults);
+
+      const camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await hands.send({ image: videoElement });
+        },
+        width: 1280,
+        height: 720
+      });
+
+      camera.start().catch(err => {
+        showError(`<b>Akses Kamera Gagal:</b> ${err.message}. Pastikan izin kamera telah diberikan di browser dan Anda menggunakan <b>localhost</b> atau <b>HTTPS</b>.`);
+      });
+
+    } catch (err) {
+      showError(`<b>Gagal Mengunduh Pustaka AI:</b> Periksa koneksi internet Anda.`);
+    }
+  </script>
+</body>
+</html>
