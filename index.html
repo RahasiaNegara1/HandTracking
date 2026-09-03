@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>3D Hand Tracking Controller - MediaPipe & Three.js</title>
+  <title>Ultra-Smooth 3D Hand Tracking - MediaPipe & Three.js</title>
   
   <!-- MediaPipe Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -65,10 +65,9 @@
       object-fit: cover;
       transform: scaleX(-1);
       z-index: 1;
-      opacity: 0.6; /* Video dibuat redup agar objek 3D lebih menonjol */
+      opacity: 0.5;
     }
 
-    /* Canvas 2D untuk Rangka Tangan MediaPipe */
     #hand_canvas {
       position: absolute;
       top: 0;
@@ -80,7 +79,6 @@
       pointer-events: none;
     }
 
-    /* Canvas 3D untuk Three.js */
     #three_canvas {
       position: absolute;
       top: 0;
@@ -134,11 +132,11 @@
 </head>
 <body>
 
-  <h1>3D Hand Tracking Interactive</h1>
+  <h1>Ultra-Smooth 3D Hand Tracking</h1>
   <p class="subtitle">
-    <b>Pinch (Ibu jari + Telunjuk):</b> Rotasi Objek | 
-    <b>2 Tangan Terbuka:</b> Perbesar/Perkecil | 
-    <b>Menunjuk:</b> Geser Objek
+    <b>Pinch (Ibu jari + Telunjuk):</b> Memutar Objek | 
+    <b>2 Tangan Terbuka:</b> Mengubah Ukuran | 
+    <b>Buka Tangan:</b> Memindahkan Posisi
   </p>
 
   <div id="display-container">
@@ -171,21 +169,26 @@
     const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
 
-    // Pencahayaan
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    // Lightings
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
 
-    const pointLight = new THREE.PointLight(0x38bdf8, 1.5);
+    const pointLight = new THREE.PointLight(0x38bdf8, 1.8);
     pointLight.position.set(5, 5, 5);
     scene.add(pointLight);
 
-    // Bikin Objek 3D Utama
+    // Objek 3D & Target Variabel untuk LERPS Smoothing
     let currentMesh;
+    const targetState = {
+      posX: 0, posY: 0,
+      rotX: 0, rotY: 0,
+      scale: 1
+    };
+
     const material = new THREE.MeshStandardMaterial({ 
       color: 0x3b82f6, 
-      roughness: 0.3,
-      metalness: 0.8,
-      wireframe: false 
+      roughness: 0.2,
+      metalness: 0.7 
     });
 
     function createMesh(geometryType) {
@@ -197,7 +200,7 @@
       } else if (geometryType === 'sphere') {
         geometry = new THREE.SphereGeometry(1.4, 32, 32);
       } else if (geometryType === 'torus') {
-        geometry = new THREE.TorusGeometry(1.2, 0.5, 16, 100);
+        geometry = new THREE.TorusGeometry(1.1, 0.4, 16, 100);
       }
 
       currentMesh = new THREE.Mesh(geometry, material);
@@ -211,33 +214,68 @@
     }
 
     function resetObject() {
-      if (currentMesh) {
-        currentMesh.position.set(0, 0, 0);
-        currentMesh.rotation.set(0, 0, 0);
-        currentMesh.scale.set(1, 1, 1);
-      }
+      targetState.posX = 0;
+      targetState.posY = 0;
+      targetState.rotX = 0;
+      targetState.rotY = 0;
+      targetState.scale = 1;
     }
 
-    // Loop Animasi Render Three.js
+    // Loop Animasi THREE.JS dengan Smoothing (Linear Interpolation)
     function animate3D() {
       requestAnimationFrame(animate3D);
+
+      if (currentMesh) {
+        // Faktor LERP (Semakin kecil semakin smooth & lambat, 0.1 adalah angka paling ideal)
+        const lerpFactor = 0.1;
+
+        currentMesh.position.x += (targetState.posX - currentMesh.position.x) * lerpFactor;
+        currentMesh.position.y += (targetState.posY - currentMesh.position.y) * lerpFactor;
+        
+        currentMesh.rotation.x += (targetState.rotX - currentMesh.rotation.x) * lerpFactor;
+        currentMesh.rotation.y += (targetState.rotY - currentMesh.rotation.y) * lerpFactor;
+
+        const currentScale = currentMesh.scale.x;
+        const newScale = currentScale + (targetState.scale - currentScale) * lerpFactor;
+        currentMesh.scale.set(newScale, newScale, newScale);
+      }
+
       renderer.render(scene, camera3D);
     }
     animate3D();
 
 
-    // --- 2. SETUP MEDIAPIPE HAND TRACKING ---
+    // --- 2. MEDIAPIPE TRACKING & FILTER NOISE ---
     const videoElement = document.getElementById('webcam');
     const handCanvas = document.getElementById('hand_canvas');
     const canvasCtx = handCanvas.getContext('2d');
     const actionStateEl = document.getElementById('action-state');
     const handCountEl = document.getElementById('hand-count');
 
+    // Filter Exponential Moving Average (Penyaring Getaran Tangan)
+    const smoothLandmarks = {};
+
+    function applyLowPassFilter(handIndex, landmarks) {
+      if (!smoothLandmarks[handIndex]) {
+        smoothLandmarks[handIndex] = landmarks.map(p => ({ ...p }));
+        return smoothLandmarks[handIndex];
+      }
+
+      const alpha = 0.35; // Bobot kehalusan data (0.35 menyaring noise getaran tanpa lag)
+      for (let i = 0; i < landmarks.length; i++) {
+        smoothLandmarks[handIndex][i].x += (landmarks[i].x - smoothLandmarks[handIndex][i].x) * alpha;
+        smoothLandmarks[handIndex][i].y += (landmarks[i].y - smoothLandmarks[handIndex][i].y) * alpha;
+        smoothLandmarks[handIndex][i].z += (landmarks[i].z - smoothLandmarks[handIndex][i].z) * alpha;
+      }
+
+      return smoothLandmarks[handIndex];
+    }
+
     function calculateDistance(p1, p2) {
       return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2) + Math.pow(p1.z - p2.z, 2));
     }
 
-    let prevHandPos = null;
+    let prevIndexPos = null;
 
     function onResults(results) {
       canvasCtx.save();
@@ -246,64 +284,63 @@
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         handCountEl.innerText = results.multiHandLandmarks.length;
 
-        // Render Rangka 21 Titik Tangan
-        for (const landmarks of results.multiHandLandmarks) {
+        // Terapkan Smoothing Filter pada Setiap Tangan
+        const filteredHands = results.multiHandLandmarks.map((lm, index) => applyLowPassFilter(index, lm));
+
+        // Render Rangka Tangan
+        for (const landmarks of filteredHands) {
           drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#00FFC8', lineWidth: 3 });
           drawLandmarks(canvasCtx, landmarks, { color: '#FF0055', lineWidth: 1, radius: 4 });
         }
 
-        const hand1 = results.multiHandLandmarks[0];
-
-        // FITUR 1: ROTASI OBJEK 3D (Pinch tangan pertama)
+        const hand1 = filteredHands[0];
         const thumbTip = hand1[4];
         const indexTip = hand1[8];
+
         const pinchDist = calculateDistance(thumbTip, indexTip);
 
+        // FITUR 1: ROTASI OBJEK 3D (Pinch / Jepit Ibu Jari & Telunjuk)
         if (pinchDist < 0.08) {
           actionStateEl.innerText = "Memutar Objek (Rotate)";
-          
-          if (prevHandPos) {
-            const deltaX = (indexTip.x - prevHandPos.x) * 5;
-            const deltaY = (indexTip.y - prevHandPos.y) * 5;
 
-            currentMesh.rotation.y += deltaX;
-            currentMesh.rotation.x += deltaY;
+          if (prevIndexPos) {
+            const deltaX = (indexTip.x - prevIndexPos.x) * 4;
+            const deltaY = (indexTip.y - prevIndexPos.y) * 4;
+
+            targetState.rotY += deltaX;
+            targetState.rotX += deltaY;
           }
-          prevHandPos = { x: indexTip.x, y: indexTip.y };
+          prevIndexPos = { x: indexTip.x, y: indexTip.y };
         } 
-        // FITUR 2: SKALA / PERBESAR OBJEK (Menggunakan 2 Tangan)
-        else if (results.multiHandLandmarks.length === 2) {
+        // FITUR 2: SKALA / PERBESAR (Menggunakan 2 Tangan)
+        else if (filteredHands.length === 2) {
           actionStateEl.innerText = "Mengubah Ukuran (Scale)";
-          const hand2 = results.multiHandLandmarks[1];
-          
+          const hand2 = filteredHands[1];
+
           const wrist1 = hand1[0];
           const wrist2 = hand2[0];
           const handsDistance = calculateDistance(wrist1, wrist2);
 
-          // Skala objek disesuaikan dengan jarak kedua tangan
-          const targetScale = Math.max(0.5, Math.min(3.0, handsDistance * 4));
-          currentMesh.scale.set(targetScale, targetScale, targetScale);
-          prevHandPos = null;
-        }
-        // FITUR 3: TRANSLASI / GESER POSISI OBJEK (Menunjuk dengan 1 Jari)
+          targetState.scale = Math.max(0.4, Math.min(2.8, handsDistance * 3.5));
+          prevIndexPos = null;
+        } 
+        // FITUR 3: GESER POSISI OBJEK (Telapak Tangan Terbuka)
         else {
-          actionStateEl.innerText = "Menggeser Objek (Translate)";
-          
-          // Konversi titik jari telunjuk ke koordinat 3D World Space
-          const targetX = (0.5 - indexTip.x) * 6; // Dibalik karena mirror
-          const targetY = (0.5 - indexTip.y) * 4;
+          actionStateEl.innerText = "Menggeser Posisi (Translate)";
 
-          // Pergerakan halus (LERP)
-          currentMesh.position.x += (targetX - currentMesh.position.x) * 0.1;
-          currentMesh.position.y += (targetY - currentMesh.position.y) * 0.1;
-          
-          prevHandPos = null;
+          // Konversi Posisi Jari Telunjuk ke Target 3D World
+          targetState.posX = (0.5 - indexTip.x) * 6; // Mirroring Hand Position
+          targetState.posY = (0.5 - indexTip.y) * 4;
+
+          prevIndexPos = null;
         }
 
       } else {
         handCountEl.innerText = "0";
         actionStateEl.innerText = "Tidak Ada Tangan";
-        prevHandPos = null;
+        prevIndexPos = null;
+        delete smoothLandmarks[0];
+        delete smoothLandmarks[1];
       }
 
       canvasCtx.restore();
@@ -317,8 +354,8 @@
     hands.setOptions({
       maxNumHands: 2,
       modelComplexity: 1,
-      minDetectionConfidence: 0.4,
-      minTrackingConfidence: 0.4
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
     });
 
     hands.onResults(onResults);
@@ -333,7 +370,7 @@
 
     camera.start();
 
-    // Penyesuaian ukuran Canvas saat layar di-resize
+    // Auto-Resize Responsif
     window.addEventListener('resize', () => {
       camera3D.aspect = container.clientWidth / container.clientHeight;
       camera3D.updateProjectionMatrix();
