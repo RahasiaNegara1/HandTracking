@@ -245,11 +245,12 @@
       canvasCtx.restore();
     }
 
-    // Penanganan Error & Inisialisasi MediaPipe
-    try {
-      const hands = new Hands({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-      });
+  // Ganti baris inisialisasi Hands lama kamu dengan yang ini:
+const hands = new Hands({
+  locateFile: (file) => {
+    return `https://unpkg.com/@mediapipe/hands/${file}`;
+  }
+});
 
       hands.setOptions({
         maxNumHands: 2,
